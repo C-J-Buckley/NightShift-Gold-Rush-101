@@ -1,0 +1,1939 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Animated Digging Overlay</title>
+  <style>
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+    }
+
+    .overlay-frame {
+      position: relative;
+      width: min(100vw, calc(100vh * 16 / 9));
+      height: min(100vh, calc(100vw * 9 / 16));
+    }
+
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      background: transparent;
+    }
+
+    .overlay-chrome {
+      position: absolute;
+      top: 0;
+      right: 0;
+      z-index: 10;
+      display: block;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      image-rendering: pixelated;
+    }
+
+    .overlay-close {
+      box-sizing: border-box;
+      width: 18px;
+      height: 16px;
+      border: 1px solid #2a180f;
+      box-shadow:
+        inset 0 0 0 1px #ffd23f,
+        1px 1px 0 #050815;
+      background: #8b2d20;
+      color: #fff5c6;
+      cursor: pointer;
+      font: 700 8px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      text-align: center;
+    }
+
+    .overlay-close:hover {
+      background: #c44732;
+    }
+
+    .overlay-last-update {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="overlay-frame" id="overlayFrame">
+    <canvas id="overlay" width="1920" height="1080" aria-label="Animated digging overlay"></canvas>
+    <div class="overlay-chrome" id="overlayChrome">
+      <button class="overlay-close" id="overlayClose" type="button" aria-label="Close overlay">X</button>
+      <div class="overlay-last-update" id="overlayLastUpdate">LAST UPDATE --:-- --</div>
+    </div>
+  </div>
+
+  <script>
+    (() => {
+      const canvas = document.getElementById("overlay");
+      const ctx = canvas.getContext("2d", { alpha: true });
+      const overlayChrome = document.getElementById("overlayChrome");
+      const overlayClose = document.getElementById("overlayClose");
+      const overlayLastUpdate = document.getElementById("overlayLastUpdate");
+      const IS_PREVIEW_MODE = location.protocol === "file:" || location.hostname === "127.0.0.1" || location.hostname === "localhost";
+      const W = 480;
+      const H = 270;
+      const SCALE = 4;
+      const STATS_PANEL_Y = H - 40;
+      const HUD_H = 64;
+      const PLAY_TOP = HUD_H + 7;
+      const START_Y = HUD_H - 8;
+      const FLOOR_Y = 225;
+      const GOLD_TOP = FLOOR_Y - 3;
+      const LOWER_DIRT_TOP = FLOOR_Y + 3;
+      const GOLD_BED_TOP = STATS_PANEL_Y - 28;
+      const GOLD_BED_BOTTOM = STATS_PANEL_Y - 1;
+      const PLAY_LEFT = 0;
+      const PLAY_RIGHT = W - 1;
+      const PLAY_WIDTH = PLAY_RIGHT - PLAY_LEFT + 1;
+      const LEFT_WALL_RIGHT = PLAY_LEFT - 1;
+      const RIGHT_WALL_LEFT = PLAY_RIGHT + 1;
+      const GOLD_HOURS = 5;
+      const CLIMB_HOURS = 5.5;
+      const CLIMB_TOP_Y = HUD_H - 22;
+      const STATION_COUNT = 27;
+      const MAX_OPERATOR_COUNT = 32;
+      const DUG_TUNNEL_WIDTH = 13;
+      const DUG_TUNNEL_HALF = Math.floor(DUG_TUNNEL_WIDTH / 2);
+      const LANE_EDGE_PADDING = 16;
+      const INTRO_DIG_SECONDS = 14;
+      const INTRO_DIG_STAGGER = 0.035;
+      const TOOL_ANIMATION_FPS = 2;
+      const STATS_CARD_W = 21;
+      const STATS_CARD_H = 34;
+      const OVERTAKE_LEAD_HOURS = 0.3;
+      const OVERTAKE_MIN_HOURS = 1;
+      const OVERTAKE_CELEBRATION_SECONDS = 3.6;
+      const OVERTAKE_CELEBRATION_COOLDOWN_SECONDS = 12;
+      const OVERTAKE_MAX_CALLOUT_MINUTES = 30;
+      const animationStart = performance.now() / 1000;
+      let cutInReadyAt = animationStart + INTRO_DIG_SECONDS + 2;
+      const SPRITE_TOP_Y = START_Y;
+      const SPRITE_GOLD_Y = GOLD_BED_TOP - 12;
+      const USE_IMAGE_SPRITES = true;
+      const minerSpriteSheet = new Image();
+      let minerSpriteSheetLoaded = false;
+      minerSpriteSheet.addEventListener("load", () => {
+        minerSpriteSheetLoaded = true;
+      });
+      minerSpriteSheet.src = "operation-gold-rush-assets/miner-sprites-option-c-transparent.png";
+      const minerImageFrames = {
+        idle: { sx: 105, sy: 80, sw: 400, sh: 540, anchorX: 0.50 },
+        pickaxe: { sx: 600, sy: 85, sw: 500, sh: 570, anchorX: 0.36 },
+        shovel: { sx: 1160, sy: 85, sw: 500, sh: 570, anchorX: 0.43 },
+        drill: { sx: 1710, sy: 75, sw: 430, sh: 575, anchorX: 0.48 },
+      };
+      const excitementSprite = new Image();
+      let excitementSpriteLoaded = false;
+      excitementSprite.addEventListener("load", () => {
+        excitementSpriteLoaded = true;
+      });
+      excitementSprite.src = "operation-gold-rush-assets/miner-excitement-transparent.png";
+      const excitementFrame = { sx: 321, sy: 75, sw: 527, sh: 1052, anchorX: 0.50 };
+      const mirroredExcitementSprite = new Image();
+      let mirroredExcitementSpriteLoaded = false;
+      mirroredExcitementSprite.addEventListener("load", () => {
+        mirroredExcitementSpriteLoaded = true;
+      });
+      mirroredExcitementSprite.src = "operation-gold-rush-assets/miner-excitement-mirrored-transparent.png";
+      const celebrationSceneSprite = new Image();
+      let celebrationSceneSpriteLoaded = false;
+      celebrationSceneSprite.addEventListener("load", () => {
+        celebrationSceneSpriteLoaded = true;
+      });
+      celebrationSceneSprite.src = "operation-gold-rush-assets/celebration-scene-transparent.png";
+      const celebrationSceneFrame = { sx: 153, sy: 45, sw: 1185, sh: 945, anchorX: 0.50 };
+      let currentOvertakeCelebration = null;
+      let lastOvertakeCelebrationEnd = -Infinity;
+      let previousOvertakeOrder = null;
+      const pendingOvertakes = new Map();
+      const celebratedOvertakes = new Set();
+      let previewOvertakeShown = false;
+
+      ctx.imageSmoothingEnabled = false;
+
+      window.addEventListener("load", () => {
+        cutInReadyAt = Math.max(cutInReadyAt, performance.now() / 1000 + 2);
+      });
+
+      function formatUpdateTime(date) {
+        return date.toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: true,
+        });
+      }
+
+      function refreshLastUpdate() {
+        overlayLastUpdate.textContent = `LAST UPDATE ${formatUpdateTime(new Date())}`;
+      }
+
+      function refreshOverlayData() {
+        const liveOperators = readDashboardOperators();
+        if (liveOperators.length) demoOperators = liveOperators;
+        refreshLastUpdate();
+      }
+
+      refreshLastUpdate();
+      setInterval(refreshOverlayData, 60 * 1000);
+
+      overlayClose.addEventListener("click", () => {
+        canvas.remove();
+        overlayChrome.remove();
+      });
+
+      const C = {
+        panel: [8, 10, 31, 244],
+        navy: [5, 8, 24, 238],
+        black: [2, 3, 8, 250],
+        blue: [42, 146, 255, 255],
+        cyan: [84, 227, 255, 255],
+        red: [238, 64, 56, 255],
+        pink: [255, 114, 180, 255],
+        yellow: [255, 220, 64, 255],
+        gold: [255, 205, 42, 255],
+        goldDark: [172, 106, 18, 255],
+        goldLight: [255, 244, 116, 255],
+        cream: [255, 245, 198, 255],
+        earthDark: [46, 25, 17, 255],
+        face: [255, 188, 116, 255],
+        faceShade: [190, 105, 68, 255],
+        boot: [12, 12, 20, 255],
+        shadow: [0, 0, 0, 80],
+      };
+
+      const earth = [
+        [95, 49, 25, 255],
+        [128, 67, 29, 255],
+        [162, 92, 36, 255],
+        [184, 116, 44, 255],
+        [112, 77, 35, 255],
+      ];
+
+      const helmets = [C.yellow, C.red, C.blue, C.pink];
+      const suits = [
+        [46, 120, 245, 255],
+        [230, 61, 67, 255],
+        [38, 190, 124, 255],
+        [238, 184, 51, 255],
+      ];
+      const highlights = [
+        [101, 180, 255, 255],
+        [255, 111, 105, 255],
+        [75, 230, 155, 255],
+        [255, 222, 82, 255],
+      ];
+      const skinTones = [
+        [255, 188, 116, 255],
+        [226, 146, 94, 255],
+        [183, 105, 72, 255],
+        [132, 79, 58, 255],
+        [240, 170, 112, 255],
+      ];
+      const skinShades = [
+        [190, 105, 68, 255],
+        [166, 84, 58, 255],
+        [122, 66, 50, 255],
+        [85, 48, 40, 255],
+        [178, 98, 64, 255],
+      ];
+      const hairColors = [
+        [28, 18, 15, 255],
+        [78, 45, 24, 255],
+        [125, 72, 31, 255],
+        [192, 133, 55, 255],
+        [58, 48, 42, 255],
+      ];
+      const gloveColors = [
+        [255, 245, 198, 255],
+        [42, 146, 255, 255],
+        [238, 64, 56, 255],
+        [255, 220, 64, 255],
+      ];
+      const beltColors = [
+        [35, 22, 15, 255],
+        [72, 42, 22, 255],
+        [18, 22, 38, 255],
+      ];
+      const laneColors = [
+        [84, 227, 255, 78],
+        [255, 220, 64, 74],
+        [255, 245, 198, 68],
+      ];
+
+      const operatorXs = Array.from({ length: STATION_COUNT }, (_, i) => {
+        const laneLeft = PLAY_LEFT + LANE_EDGE_PADDING;
+        const laneRight = PLAY_RIGHT - LANE_EDGE_PADDING;
+        return laneLeft + Math.round(i * (laneRight - laneLeft) / (STATION_COUNT - 1));
+      });
+
+      function xForOperatorCount(index, total) {
+        const laneLeft = PLAY_LEFT + LANE_EDGE_PADDING;
+        const laneRight = PLAY_RIGHT - LANE_EDGE_PADDING;
+        if (total <= 1) return Math.round((laneLeft + laneRight) / 2);
+        return laneLeft + Math.round(index * (laneRight - laneLeft) / (total - 1));
+      }
+
+      const stationXs = Array.from({ length: 13 }, (_, i) => 40 + i * 31);
+
+      const lockerRoster = [
+        [1, "Myron Grant"],
+        [2, "Nathan Chang"],
+        [3, "Burak Avacik"],
+        [4, "William Mui"],
+        [6, "Ja'meisha R"],
+        [7, "Christian Surguy"],
+        [8, "Darion B"],
+        [9, "Joshua Ahanonu"],
+        [10, "Diaviaun Agee"],
+        [11, "Eric Rodriguez"],
+        [12, "Eliezer Domingo"],
+        [13, "Seanna Moreno"],
+        [14, "Jaime Monroy"],
+        [15, "Brennen Tsang"],
+        [16, "Isaac Fineaso"],
+        [17, "Naing Tun"],
+        [18, "Jakari Wilson"],
+        [19, "Curtis Trahan"],
+        [20, "Dhanasekar Jayanthi"],
+        [21, "Casey Pollock"],
+        [22, "Nhung Do"],
+        [23, "Oscar Duran"],
+        [24, "William Robinson III"],
+        [25, "Andrew Flores"],
+        [26, "Mark Amirkhan"],
+        [27, "Kelvin Chung"],
+        [28, "Annalie Janelle"],
+        [29, "Edison Isaias Barrientos"],
+        [30, "Malik Holloway"],
+        [31, "Jaden James"],
+        [32, "Jasmine Jackson"],
+        [33, "Bobbi Brown"],
+        [34, "Ty-Reese Raney"],
+        [35, "Avantika Deo"],
+        [36, "Terryn Williams"],
+        [37, "Jamir Brown-Anderson"],
+        [38, "Prasidhu Loya"],
+        [39, "Andrew Trujillo"],
+        [40, "Lavelle Shah-Marquis"],
+        [41, "Tauane Tome"],
+        [42, "Arman Ara Apoyan"],
+        [43, "Timothy Keller"],
+        [44, "Ellis Atkins"],
+        [45, "Lovedeep Singh"],
+        [46, "Betsy Espinoza"],
+        [47, "Harold Mark Esguerra"],
+        [48, "Jason Thomas"],
+        [49, "Joel Polanco-Canales"],
+        [50, "Marion Morehead"],
+        [51, "Gaurav Dinesh Pawar"],
+        [52, "Mukul Ved"],
+        [53, "Birhanu Hagos"],
+        [54, "Andre Ennon"],
+        [55, "Diyari Ugapo"],
+        [56, "Kayvoss Lewis"],
+        [57, "Kendal Peters"],
+      ];
+
+      const lockerByOperator = buildLockerMap(lockerRoster);
+      const lockerFullNames = lockerRoster.map(([locker, name]) => [normalizeOperatorName(name), locker]);
+
+      function normalizeOperatorName(value) {
+        return String(value || "")
+          .toLowerCase()
+          .replace(/[’]/g, "'")
+          .replace(/&/g, " and ")
+          .replace(/[^a-z0-9]+/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+
+      function buildLockerMap(roster) {
+        const map = new Map();
+        const suffixes = new Set(["jr", "sr", "ii", "iii", "iv", "v"]);
+        const addAlias = (alias, locker) => {
+          const normalized = normalizeOperatorName(alias);
+          if (normalized && !map.has(normalized)) map.set(normalized, locker);
+        };
+
+        roster.forEach(([locker, name]) => {
+          const normalized = normalizeOperatorName(name);
+          const parts = normalized.split(" ").filter(Boolean);
+          addAlias(name, locker);
+          if (parts.length < 2) return;
+
+          let lastNameIndex = parts.length - 1;
+          for (let i = parts.length - 1; i > 0; i--) {
+            if (!suffixes.has(parts[i])) {
+              lastNameIndex = i;
+              break;
+            }
+          }
+
+          const first = parts[0];
+          const lastName = parts[lastNameIndex];
+          const suffixText = parts.slice(lastNameIndex + 1).join(" ");
+          if (lastName) {
+            addAlias(`${first} ${lastName[0]}`, locker);
+            if (suffixText) addAlias(`${first} ${lastName[0]} ${suffixText}`, locker);
+          }
+          if (parts.length > 2) {
+            addAlias(`${first} ${parts[1][0]}`, locker);
+            if (lastName) addAlias(`${parts.slice(0, lastNameIndex).join(" ")} ${lastName[0]}`, locker);
+          }
+        });
+
+        return map;
+      }
+
+      function lockerForOperatorName(name) {
+        const normalized = normalizeOperatorName(name);
+        if (lockerByOperator.has(normalized)) return lockerByOperator.get(normalized);
+
+        for (const [knownName, locker] of lockerFullNames) {
+          if (normalized.includes(knownName)) return locker;
+        }
+        return null;
+      }
+
+      function parseDashboardNumber(value) {
+        const match = String(value || "").replace(/,/g, "").match(/-?\d+(?:\.\d+)?/);
+        return match ? Number(match[0]) : 0;
+      }
+
+      function shiftWindowFor(date) {
+        const start = new Date(date);
+        start.setHours(22, 30, 0, 0);
+        if (date < start) start.setDate(start.getDate() - 1);
+
+        const end = new Date(start);
+        end.setHours(end.getHours() + 8);
+        return { start, end };
+      }
+
+      function productiveElapsedHours(date = new Date()) {
+        const { start, end } = shiftWindowFor(date);
+        const clamped = new Date(Math.min(Math.max(date.getTime(), start.getTime()), end.getTime()));
+        const breaks = [
+          { startMin: 120, durationMin: 15 },
+          { startMin: 240, durationMin: 30 },
+          { startMin: 360, durationMin: 15 },
+        ];
+
+        let elapsedMinutes = (clamped - start) / 60000;
+        breaks.forEach((breakInfo) => {
+          const used = Math.max(0, Math.min(elapsedMinutes - breakInfo.startMin, breakInfo.durationMin));
+          elapsedMinutes -= used;
+        });
+
+        return Math.max(0.25, Math.min(6.5, elapsedMinutes / 60));
+      }
+
+      function projectedHoursFromCurrent(currentHours, evalHours) {
+        if (evalHours > currentHours) return evalHours;
+        const projected = currentHours / productiveElapsedHours() * 6.5;
+        return Math.max(currentHours, Math.min(9.9, projected));
+      }
+
+      function headerIndex(headers, names) {
+        return headers.findIndex(header => names.some(name => header.includes(name)));
+      }
+
+      function tableRows(table) {
+        return Array.from(table.querySelectorAll("tr"))
+          .map(row => Array.from(row.children).map(cell => cell.textContent.trim()));
+      }
+
+      function readDashboardOperators() {
+        const root = document.getElementById("operatorGoldRushRoot") || document.getElementById("overlayFrame");
+        const tables = Array.from(document.querySelectorAll("table"))
+          .filter(table => !root || !root.contains(table));
+
+        for (const table of tables) {
+          const rows = tableRows(table).filter(row => row.length);
+          if (rows.length < 2) continue;
+
+          const headers = rows[0].map(cell => cell.toLowerCase().replace(/\s+/g, " ").trim());
+          const operatorIndex = headerIndex(headers, ["operator"]);
+          const collectSessionsIndex = headerIndex(headers, ["collect sessions"]);
+          const collectedHoursIndex = headerIndex(headers, ["collected hours"]);
+          const evalSessionsIndex = headerIndex(headers, ["eval sessions"]);
+          const evalHoursIndex = headerIndex(headers, ["eval hours"]);
+
+          if (operatorIndex < 0 || collectedHoursIndex < 0) continue;
+
+          const liveRows = rows.slice(1)
+            .map(row => {
+              const locker = lockerForOperatorName(row[operatorIndex]);
+              if (!locker) return null;
+
+              const collectSessions = parseDashboardNumber(row[collectSessionsIndex]);
+              const evalSessions = parseDashboardNumber(row[evalSessionsIndex]);
+              const collectedHours = parseDashboardNumber(row[collectedHoursIndex]);
+              const evalHours = parseDashboardNumber(row[evalHoursIndex]);
+              const currentHours = collectedHours + evalHours;
+              const sessions = collectSessions + evalSessions;
+
+              if (currentHours <= 0 && sessions <= 0) return null;
+
+              return {
+                locker,
+                currentHours,
+                projectedHours: projectedHoursFromCurrent(currentHours, 0),
+                sessions,
+              };
+            })
+            .filter(Boolean)
+            .sort((a, b) => a.locker - b.locker)
+            .slice(0, STATION_COUNT);
+
+          if (liveRows.length) {
+            return liveRows.map((op, i) => ({
+              ...op,
+              x: xForOperatorCount(i, liveRows.length),
+            }));
+          }
+        }
+
+        return [];
+      }
+
+      function demoOperatorData() {
+        return operatorXs.map((x, i) => {
+        const hours = Math.min(5.95, 0.35 + (((i * 7) % STATION_COUNT) / (STATION_COUNT - 1)) * 5.65);
+        return {
+          x,
+          locker: i + 1,
+          currentHours: hours,
+          projectedHours: Math.max(hours, hours + (((i * 5) % 7) * 0.17)),
+          sessions: 8 + ((i * 13) % 35),
+        };
+        });
+      }
+
+      function activeOperatorData() {
+        const liveOperators = readDashboardOperators();
+        if (liveOperators.length) return liveOperators;
+        return IS_PREVIEW_MODE ? demoOperatorData() : [];
+      }
+
+      let demoOperators = activeOperatorData();
+
+      const digitMap = {
+        "0": ["111", "101", "101", "101", "111"],
+        "1": ["010", "110", "010", "010", "111"],
+        "2": ["111", "001", "111", "100", "111"],
+        "3": ["111", "001", "111", "001", "111"],
+        "4": ["101", "101", "111", "001", "001"],
+        "5": ["111", "100", "111", "001", "111"],
+        "6": ["111", "100", "111", "101", "111"],
+        "7": ["111", "001", "001", "010", "010"],
+        "8": ["111", "101", "111", "101", "111"],
+        "9": ["111", "101", "111", "001", "111"],
+      };
+      const segmentGlyphs = {
+        "0": "abcfed",
+        "1": "bc",
+        "2": "abged",
+        "3": "abgcd",
+        "4": "fgbc",
+        "5": "afgcd",
+        "6": "afgecd",
+        "7": "abc",
+        "8": "abcdefg",
+        "9": "abfgcd",
+        "S": "afgcd",
+        "H": "fgebc",
+        "P": "abfge",
+      };
+
+      function rgba(color, alphaScale = 1) {
+        const a = Math.max(0, Math.min(255, Math.round(color[3] * alphaScale))) / 255;
+        return `rgba(${color[0]}, ${color[1]}, ${color[2]}, ${a})`;
+      }
+
+      function rect(x, y, w, h, color, alphaScale = 1) {
+        ctx.fillStyle = rgba(color, alphaScale);
+        ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+      }
+
+      function oval(cx, cy, rx, ry, color, alphaScale = 1) {
+        ctx.fillStyle = rgba(color, alphaScale);
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      function lineRect(x1, y1, x2, y2, color, alphaScale = 1) {
+        const x = Math.min(x1, x2);
+        const y = Math.min(y1, y2);
+        rect(x, y, Math.abs(x2 - x1) + 1, Math.abs(y2 - y1) + 1, color, alphaScale);
+      }
+
+      function drawText(text, x, y, color, size = 6) {
+        ctx.fillStyle = rgba(color);
+        ctx.font = `${size}px monospace`;
+        ctx.textBaseline = "top";
+        ctx.fillText(text, x, y);
+      }
+
+      function drawOutlinedText(text, x, y, color, size = 4) {
+        ctx.save();
+        ctx.font = `${size}px monospace`;
+        ctx.textBaseline = "top";
+        ctx.fillStyle = rgba([2, 3, 8, 235]);
+        ctx.fillText(text, x + 1, y + 1);
+        ctx.fillStyle = rgba(color);
+        ctx.fillText(text, x, y);
+        ctx.restore();
+      }
+
+      function drawCenteredOutlinedText(text, cx, y, color, size = 3) {
+        ctx.save();
+        ctx.font = `${size}px monospace`;
+        ctx.textBaseline = "top";
+        const x = Math.round(cx - ctx.measureText(text).width / 2);
+        ctx.fillStyle = rgba([2, 3, 8, 235]);
+        ctx.fillText(text, x + 1, y + 1);
+        ctx.fillStyle = rgba(color);
+        ctx.fillText(text, x, y);
+        ctx.restore();
+      }
+
+      function drawSegmentChar(ch, x, y, color, alpha = 1) {
+        if (ch === ".") {
+          rect(x, y + 5, 1, 1, color, alpha);
+          return 2;
+        }
+        if (ch === "#") {
+          rect(x, y + 1, 1, 4, color, alpha);
+          rect(x + 2, y + 1, 1, 4, color, alpha);
+          rect(x, y + 2, 3, 1, color, alpha);
+          rect(x, y + 4, 3, 1, color, alpha);
+          return 4;
+        }
+
+        const segments = segmentGlyphs[ch];
+        if (!segments) return 2;
+        const dim = [36, 48, 72, 255];
+        const drawSeg = (id, active) => {
+          const segColor = active ? color : dim;
+          const segAlpha = active ? alpha : 0.22;
+          if (id === "a") rect(x + 1, y, 2, 1, segColor, segAlpha);
+          if (id === "b") rect(x + 3, y + 1, 1, 2, segColor, segAlpha);
+          if (id === "c") rect(x + 3, y + 4, 1, 2, segColor, segAlpha);
+          if (id === "d") rect(x + 1, y + 6, 2, 1, segColor, segAlpha);
+          if (id === "e") rect(x, y + 4, 1, 2, segColor, segAlpha);
+          if (id === "f") rect(x, y + 1, 1, 2, segColor, segAlpha);
+          if (id === "g") rect(x + 1, y + 3, 2, 1, segColor, segAlpha);
+        };
+
+        ["a", "b", "c", "d", "e", "f", "g"].forEach(id => drawSeg(id, segments.includes(id)));
+        return 5;
+      }
+
+      function segmentTextWidth(text) {
+        return text.split("").reduce((sum, ch) => sum + (ch === "." ? 2 : ch === "#" ? 4 : segmentGlyphs[ch] ? 5 : 2), 0) - 1;
+      }
+
+      function drawSegmentText(text, x, y, color) {
+        let cursor = x;
+        for (const ch of text) {
+          cursor += drawSegmentChar(ch, cursor, y, color);
+        }
+      }
+
+      function drawCenteredSegmentText(text, cx, y, color) {
+        const x = Math.round(cx - segmentTextWidth(text) / 2);
+        drawSegmentText(text, x + 1, y + 1, [2, 3, 8, 235]);
+        drawSegmentText(text, x, y, color);
+      }
+
+      function drawCenteredTvText(text, cx, y, color, size = 3) {
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.font = `900 ${Math.round(size * SCALE)}px "Arial Narrow", "Aptos Narrow", Arial, sans-serif`;
+        ctx.textBaseline = "top";
+        const x = Math.round(cx * SCALE - ctx.measureText(text).width / 2);
+        const py = Math.round(y * SCALE);
+        ctx.fillStyle = rgba([2, 3, 8, 245]);
+        ctx.fillText(text, x + 2, py + 2);
+        ctx.fillText(text, x - 2, py + 2);
+        ctx.fillStyle = rgba(color);
+        ctx.fillText(text, x, py);
+        ctx.restore();
+      }
+
+      function drawTvText(text, x, y, color, size = 4) {
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.font = `900 ${Math.round(size * SCALE)}px "Arial Narrow", "Aptos Narrow", Arial, sans-serif`;
+        ctx.textBaseline = "top";
+        const px = Math.round(x * SCALE);
+        const py = Math.round(y * SCALE);
+        ctx.fillStyle = rgba([2, 3, 8, 245]);
+        ctx.fillText(text, px + 2, py + 2);
+        ctx.fillText(text, px - 2, py + 2);
+        ctx.fillStyle = rgba(color);
+        ctx.fillText(text, px, py);
+        ctx.restore();
+      }
+
+      function tvTextWidth(text, size = 4) {
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.font = `900 ${Math.round(size * SCALE)}px "Arial Narrow", "Aptos Narrow", Arial, sans-serif`;
+        const width = ctx.measureText(text).width / SCALE;
+        ctx.restore();
+        return width;
+      }
+
+      function drawRockTitle() {
+        const title = "Operator Gold Rush";
+        ctx.save();
+        ctx.font = "bold 13px monospace";
+        ctx.textBaseline = "top";
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = rgba([35, 21, 14, 255]);
+        ctx.strokeText(title, 10, 8);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = rgba([102, 66, 31, 255]);
+        ctx.strokeText(title, 10, 8);
+        ctx.fillStyle = rgba([255, 219, 72, 255]);
+        ctx.fillText(title, 10, 8);
+        ctx.fillStyle = rgba([255, 248, 154, 210]);
+        ctx.fillText(title, 10, 7);
+        ctx.font = "bold 4px monospace";
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = rgba([35, 21, 14, 230]);
+        ctx.strokeText("by Lion Lab", 35, 24);
+        ctx.fillStyle = rgba([255, 245, 198, 235]);
+        ctx.fillText("by Lion Lab", 35, 24);
+        [[9, 6], [53, 19], [94, 7], [141, 19], [173, 10]].forEach(([x, y], i) => {
+          rect(x, y, 2 + (i % 2), 1, [122, 86, 45, 220]);
+          rect(x + 1, y, 1, 1, [255, 244, 116, 220], 0.55);
+        });
+        ctx.restore();
+      }
+
+      function drawLastUpdateText() {
+        const label = overlayLastUpdate.textContent || "LAST UPDATE --:-- --";
+        rect(13, 32, 108, 8, [5, 8, 24, 205]);
+        rect(13, 39, 108, 1, [46, 25, 17, 255]);
+        rect(13, 32, 108, 1, [150, 112, 72, 175]);
+        drawText(label, 17, 34, C.gold, 4);
+      }
+
+      function drawLeaderboard() {
+        const w = 190;
+        const x = W - w - 1;
+        const y = 1;
+        const h = 31;
+        const totalHours = demoOperators.reduce((sum, op) => sum + op.currentHours, 0);
+        const averageHours = demoOperators.length ? totalHours / demoOperators.length : 0;
+        const leaders = [...demoOperators]
+          .sort((a, b) => (b.currentHours - a.currentHours) || (b.sessions - a.sessions) || (a.locker - b.locker))
+          .slice(0, 3);
+
+        rect(x - 1, y - 1, w + 2, h + 2, [2, 3, 8, 170]);
+        rect(x, y, w, h, [5, 8, 24, 198]);
+        rect(x, y, w, 1, C.gold, 0.95);
+        rect(x, y + h - 1, w, 1, [46, 25, 17, 235]);
+        rect(x + 1, y + 1, w - 2, 1, [255, 244, 116, 110]);
+        drawTvText("TOP 3", x + 7, y + 6, C.goldLight, 5);
+
+        const medalStyles = [
+          { fill: C.gold, edge: C.goldLight, shade: C.goldDark },
+          { fill: [198, 213, 224, 255], edge: [242, 250, 255, 255], shade: [92, 110, 124, 255] },
+          { fill: [198, 113, 45, 255], edge: [255, 190, 96, 255], shade: [92, 48, 25, 255] },
+        ];
+        const badgeW = 44;
+        const badgeGap = 5;
+        const badgeStartX = x + 28;
+
+        leaders.forEach((op, i) => {
+          const medal = medalStyles[i];
+          const badgeX = badgeStartX + i * (badgeW + badgeGap);
+          const badgeY = y + 3;
+          const badgeH = 12;
+          const badgeText = `#${op.locker} ${op.currentHours.toFixed(1)}H`;
+          const badgeTextSize = 5;
+          const badgeTextY = badgeY + Math.round((badgeH - badgeTextSize) / 2);
+          const rankColor = i === 0 ? C.goldLight : (i === 1 ? C.cyan : C.cream);
+
+          rect(badgeX - 1, badgeY - 1, badgeW + 2, badgeH + 2, [2, 3, 8, 210]);
+          rect(badgeX, badgeY, badgeW, badgeH, medal.fill, 0.38);
+          rect(badgeX, badgeY, badgeW, 1, medal.edge, 0.95);
+          rect(badgeX, badgeY + badgeH - 1, badgeW, 1, medal.shade, 0.95);
+          rect(badgeX, badgeY, 1, badgeH, medal.edge, 0.75);
+          rect(badgeX + badgeW - 1, badgeY, 1, badgeH, medal.shade, 0.75);
+          rect(badgeX + 2, badgeY + 2, Math.max(2, badgeW - 4), 1, medal.edge, 0.28);
+
+          drawCenteredTvText(badgeText, badgeX + badgeW / 2, badgeTextY, rankColor, badgeTextSize);
+        });
+
+        rect(x + 5, y + 16, w - 10, 1, [255, 244, 116, 90]);
+        const totalValue = `${totalHours.toFixed(1)}H`;
+        const avgValue = `${averageHours.toFixed(1)}H`;
+        const operatorValue = `${demoOperators.length}/${MAX_OPERATOR_COUNT}`;
+        const labelValueGap = 4;
+        const drawSummaryMetric = (centerX, label, value, labelColor) => {
+          const labelW = tvTextWidth(label, 4);
+          const groupW = labelW + labelValueGap + tvTextWidth(value, 5);
+          const labelX = centerX - groupW / 2;
+          drawTvText(label, labelX, y + 20, labelColor, 4);
+          drawTvText(value, labelX + labelW + labelValueGap, y + 19, C.cream, 5);
+        };
+
+        drawSummaryMetric(badgeStartX + badgeW / 2, "TOTAL", totalValue, C.goldLight);
+        drawSummaryMetric(badgeStartX + (badgeW + badgeGap) + badgeW / 2, "AVG", avgValue, C.cyan);
+        drawSummaryMetric(badgeStartX + (badgeW + badgeGap) * 2 + badgeW / 2, "OPS", operatorValue, C.gold);
+      }
+
+
+      function tinyDigit(ch, x, y, color) {
+        const rows = digitMap[ch];
+        for (let yy = 0; yy < rows.length; yy++) {
+          for (let xx = 0; xx < rows[yy].length; xx++) {
+            if (rows[yy][xx] === "1") rect(x + xx, y + yy, 1, 1, color);
+          }
+        }
+      }
+
+      function lockerLabel(num, cx, y) {
+        const text = String(num).padStart(2, "0");
+        rect(cx - 5, y, 11, 8, [3, 4, 12, 248]);
+        lineRect(cx - 5, y, cx + 5, y, num % 2 ? C.gold : C.cyan);
+        lineRect(cx - 5, y + 7, cx + 5, y + 7, num % 2 ? C.gold : C.cyan);
+        lineRect(cx - 5, y, cx - 5, y + 7, num % 2 ? C.gold : C.cyan);
+        lineRect(cx + 5, y, cx + 5, y + 7, num % 2 ? C.gold : C.cyan);
+        tinyDigit(text[0], cx - 3, y + 2, C.cream);
+        tinyDigit(text[1], cx + 1, y + 2, C.cream);
+      }
+
+      function random01(seed) {
+        const n = Math.sin(seed * 12.9898) * 43758.5453;
+        return n - Math.floor(n);
+      }
+
+      function clamp01(value) {
+        return Math.max(0, Math.min(1, value));
+      }
+
+      function easeOutCubic(value) {
+        const t = clamp01(value);
+        return 1 - Math.pow(1 - t, 3);
+      }
+
+      function drawImpactBurst(cx, cy, phase, color = C.goldLight) {
+        const alpha = 1 - clamp01(phase);
+        const reach = 2 + Math.floor(phase * 5);
+        rect(cx, cy - reach, 1, reach + 1, color, alpha);
+        rect(cx, cy, 1, reach + 1, color, alpha);
+        rect(cx - reach, cy, reach + 1, 1, color, alpha);
+        rect(cx, cy, reach + 1, 1, color, alpha);
+        rect(cx - reach + 1, cy - reach + 1, 1, 1, C.cream, alpha * 0.85);
+        rect(cx + reach - 1, cy - reach + 1, 1, 1, C.cream, alpha * 0.85);
+        rect(cx - reach + 1, cy + reach - 1, 1, 1, C.gold, alpha * 0.8);
+        rect(cx + reach - 1, cy + reach - 1, 1, 1, C.gold, alpha * 0.8);
+      }
+
+      function introDigProgress(t, index) {
+        const elapsed = t - animationStart - index * INTRO_DIG_STAGGER;
+        return easeOutCubic(elapsed / INTRO_DIG_SECONDS);
+      }
+
+      function visibleHoursForOperator(op, index, t) {
+        return op.currentHours * introDigProgress(t, index);
+      }
+
+      function toolForHours(hours) {
+        if (hours >= 4) return "drill";
+        if (hours > 2) return "shovel";
+        return "pickaxe";
+      }
+
+      function stationMarker(n, x, y) {
+        const outline = n % 2 ? C.blue : C.red;
+        const shine = n % 2 ? C.cyan : C.pink;
+        rect(x, y, 18, 9, [4, 4, 12, 250]);
+        rect(x, y, 18, 1, outline);
+        rect(x, y + 8, 18, 1, outline);
+        rect(x, y, 1, 9, outline);
+        rect(x + 17, y, 1, 9, outline);
+        rect(x + 1, y + 1, 16, 1, shine);
+        rect(x + 6, y + 3, 6, 3, [60, 65, 78, 255]);
+      }
+
+      function dirtRect(x1, y1, x2, y2, y0 = HUD_H + 1) {
+        for (let y = y1; y <= y2; y += 10) {
+          rect(x1, y, x2 - x1 + 1, Math.min(10, y2 - y + 1), earth[Math.floor((y - y0) / 10) % earth.length]);
+        }
+      }
+
+      function drawPlayfieldDirt() {
+        const x1 = 0;
+        const x2 = W - 1;
+        const y1 = HUD_H + 1;
+        const y2 = LOWER_DIRT_TOP + 1;
+        for (let y = y1; y <= y2; y += 10) {
+          const color = earth[Math.floor((y - y1) / 10) % earth.length];
+          rect(x1, y, x2 - x1 + 1, Math.min(10, y2 - y + 1), color);
+        }
+
+        for (let i = 0; i < 520; i++) {
+          const x = x1 + Math.floor(random01(i + 301) * (x2 - x1 + 1));
+          const y = y1 + Math.floor(random01(i + 307) * (y2 - y1 + 1));
+          const colors = earth.concat([C.earthDark, [210, 143, 54, 255], [92, 63, 34, 255]]);
+          const size = [1, 1, 1, 2][Math.floor(random01(i + 313) * 4)];
+          rect(x, y, size, size, colors[Math.floor(random01(i + 317) * colors.length)]);
+        }
+      }
+
+      function drawDugTunnels(t) {
+        demoOperators.forEach((op, i) => {
+          const x = op.x;
+          const visibleHours = visibleHoursForOperator(op, i, t);
+          const y = Math.round(yForHours(visibleHours));
+          const progress = clamp01(visibleHours / GOLD_HOURS);
+          const top = START_Y + 6 + Math.floor(random01(i + 1510) * 4);
+          const bottom = Math.max(top + 5, Math.min(FLOOR_Y + 1, y + 7));
+          const left = x - DUG_TUNNEL_HALF;
+          const right = x + DUG_TUNNEL_HALF;
+
+          for (let col = 0; col < DUG_TUNNEL_WIDTH; col += 3) {
+            const segW = Math.min(3, DUG_TUNNEL_WIDTH - col);
+            const segBottom = Math.max(top + 4, bottom - Math.floor(random01(i * 1600 + col) * 5));
+            rect(left + col, top, segW, segBottom - top + 1, [20, 11, 12, 246]);
+            if (col >= 2 && col <= DUG_TUNNEL_WIDTH - 5) {
+              rect(left + col, top, segW, segBottom - top + 1, [2, 3, 8, 188]);
+            }
+          }
+
+          for (let cap = 0; cap < DUG_TUNNEL_WIDTH; cap += 2) {
+            const topChip = 1 + Math.floor(random01(i * 1700 + cap) * 4);
+            const bottomChip = 1 + Math.floor(random01(i * 1800 + cap) * 4);
+            const chipColor = earth[Math.floor(random01(i * 1900 + cap) * earth.length)];
+            if (random01(i * 2000 + cap) > 0.25) rect(left + cap, top, 2, topChip, chipColor, 0.82);
+            if (random01(i * 2100 + cap) > 0.32) rect(left + cap, bottom - bottomChip + 1, 2, bottomChip, chipColor, 0.72);
+          }
+
+          // Uneven edge pixels make the cleared dirt read as a dug tunnel.
+          for (let yy = top + 3; yy < bottom; yy += 8) {
+            const leftChip = random01(i * 1000 + yy) > 0.45 ? 1 : 0;
+            const rightChip = random01(i * 1000 + yy + 17) > 0.5 ? 1 : 0;
+            if (leftChip) rect(left - 1, yy, 2, 3, [82, 45, 22, 150]);
+            if (rightChip) rect(right, yy + 2, 2, 3, [82, 45, 22, 150]);
+            if (random01(i * 1000 + yy + 31) > 0.68) rect(left + 3, yy + 1, 2, 1, [114, 63, 28, 90]);
+            if (random01(i * 1000 + yy + 47) > 0.72) rect(right - 4, yy + 4, 2, 1, [114, 63, 28, 80]);
+          }
+
+          // Active digging front: loose dirt disappears at the sprite's feet.
+          const dustPulse = 0.55 + 0.35 * Math.sin(t * 8 + i);
+          if (progress < 1 || introDigProgress(t, i) < 1) {
+            rect(left + 1, bottom + 1, 3, 1, [210, 143, 54, 210], dustPulse);
+            rect(right - 3, bottom + 2, 3, 1, [255, 220, 64, 170], dustPulse);
+            rect(x - 2, bottom + 3, 4, 1, [184, 116, 44, 180], dustPulse);
+
+            for (let p = 0; p < 7; p++) {
+              const life = (t * 0.75 + i * 0.137 + p * 0.173) % 1;
+              const dir = p % 2 === 0 ? -1 : 1;
+              const spread = 2 + life * (3 + (p % 3));
+              const lift = Math.sin(life * Math.PI) * (5 + (p % 2) * 2);
+              const fall = life * life * 5;
+              const px = x + dir * spread + Math.floor(random01(i * 701 + p * 19) * 3) - 1;
+              const py = bottom + 2 - lift + fall + Math.floor(random01(i * 727 + p * 23) * 2);
+              const particleColor = [
+                [210, 143, 54, 220],
+                [184, 116, 44, 220],
+                [112, 77, 35, 230],
+                [255, 220, 64, 170],
+              ][p % 4];
+              const size = life < 0.32 ? 2 : 1;
+              rect(px, py, size, size, particleColor, 0.25 + (1 - life) * 0.75);
+            }
+          }
+        });
+      }
+
+      function drawCloud(x, y, scale, alpha = 1) {
+        const white = [255, 250, 218, 220];
+        const shade = [206, 232, 239, 190];
+        rect(x + 2 * scale, y + 5 * scale, 24 * scale, 5 * scale, shade, alpha);
+        rect(x + 5 * scale, y + 1 * scale, 8 * scale, 8 * scale, white, alpha);
+        rect(x + 11 * scale, y - 1 * scale, 10 * scale, 10 * scale, white, alpha);
+        rect(x + 19 * scale, y + 2 * scale, 9 * scale, 7 * scale, white, alpha);
+        rect(x, y + 7 * scale, 31 * scale, 4 * scale, white, alpha);
+        rect(x + 4 * scale, y + 10 * scale, 22 * scale, 2 * scale, shade, alpha * 0.8);
+      }
+
+      function drawSky(t) {
+        rect(0, 0, W, HUD_H - 15, [67, 178, 238, 255]);
+        rect(0, 17, W, 17, [90, 198, 245, 255]);
+        rect(0, 34, W, HUD_H - 49, [126, 218, 250, 255]);
+        rect(0, HUD_H - 15, W, 2, [214, 244, 139, 210]);
+
+        const clouds = [
+          { x: 22, y: 11, s: 1, speed: 5.5, a: 0.92 },
+          { x: 128, y: 28, s: 1, speed: 3.8, a: 0.78 },
+          { x: 252, y: 15, s: 1, speed: 4.7, a: 0.86 },
+          { x: 384, y: 35, s: 1, speed: 3.1, a: 0.7 },
+        ];
+
+        clouds.forEach((cloud, i) => {
+          const span = W + 90;
+          const moved = (cloud.x - ((t * cloud.speed) % span) + span) % span - 45;
+          drawCloud(Math.round(moved), cloud.y + (i % 2), cloud.s, cloud.a);
+          if (moved > W - 70) drawCloud(Math.round(moved - span), cloud.y + (i % 2), cloud.s, cloud.a);
+        });
+      }
+
+      function drawStatic(t) {
+        drawSky(t);
+        drawRockTitle();
+        drawLastUpdateText();
+        drawLeaderboard();
+
+        for (let x = PLAY_LEFT; x <= PLAY_RIGHT; x += 6) {
+          const turfY = HUD_H - 16 + Math.floor(random01(x + 689) * 4);
+          const turfW = 5 + Math.floor(random01(x + 693) * 5);
+          rect(x, turfY, turfW, 3, [71, 168, 56, 255]);
+          rect(x, turfY - 1, Math.max(2, turfW - 1), 1, [140, 230, 84, 220]);
+        }
+        for (let x = PLAY_LEFT; x <= PLAY_RIGHT; x += 7) {
+          const soilY = HUD_H - 10 + Math.floor(random01(x + 697) * 5);
+          const soilW = 6 + Math.floor(random01(x + 699) * 5);
+          rect(x, soilY, soilW, HUD_H + 1 - soilY, [68, 36, 20, 230]);
+          if (random01(x + 703) > 0.5) rect(x + 1, soilY, Math.max(2, soilW - 2), 1, [112, 77, 35, 210]);
+        }
+        for (let x = PLAY_LEFT; x <= PLAY_RIGHT; x += 5) {
+          const bladeH = 2 + Math.floor(random01(x + 701) * 5);
+          const color = random01(x + 707) > 0.45 ? [124, 218, 75, 255] : [47, 142, 55, 255];
+          rect(x, HUD_H - 16 - bladeH, 1, bladeH, color);
+          if (random01(x + 711) > 0.6) rect(x + 1, HUD_H - 15 - Math.floor(bladeH / 2), 1, Math.max(1, bladeH - 1), [177, 240, 96, 220]);
+        }
+        for (let x = PLAY_LEFT + 2; x <= PLAY_RIGHT; x += 11) {
+          rect(x, HUD_H - 9, 5 + Math.floor(random01(x + 719) * 5), 2, earth[Math.floor(random01(x + 727) * earth.length)], 0.9);
+        }
+
+        drawPlayfieldDirt();
+        dirtRect(0, LOWER_DIRT_TOP - 2, 479, GOLD_BED_BOTTOM, LOWER_DIRT_TOP - 2);
+
+        for (let i = 0; i < 95; i++) {
+          const x = Math.floor(random01(i + 33) * W);
+          const y = GOLD_BED_TOP + Math.floor(random01(i + 37) * (GOLD_BED_BOTTOM - GOLD_BED_TOP - 5));
+          const w = 4 + Math.floor(random01(i + 41) * 8);
+          const h = 3 + Math.floor(random01(i + 43) * 9);
+          const color = earth[Math.floor(random01(i + 47) * earth.length)];
+          rect(x, y, w, h, [46, 25, 17, 150]);
+          rect(x + 1, y + 1, Math.max(2, w - 2), Math.max(2, h - 1), color);
+          if (random01(i + 49) > 0.62) rect(x + 1, y, Math.max(2, w - 3), 1, [112, 77, 35, 150]);
+        }
+
+        for (let i = 0; i < 650; i++) {
+          const x = Math.floor(random01(i + 2) * W);
+          const y = HUD_H + 1 + Math.floor(random01(i + 5) * (H - HUD_H - 1));
+          const inDirt = y >= HUD_H + 1;
+          if (!inDirt) continue;
+          const colors = earth.concat([C.earthDark, [210, 143, 54, 255]]);
+          const size = [1, 1, 2, 2, 3][Math.floor(random01(i + 9) * 5)];
+          rect(x, y, size, size, colors[Math.floor(random01(i + 11) * colors.length)]);
+        }
+
+        for (let i = 0; i < 50; i++) {
+          const x = Math.floor(random01(i + 77) * W);
+          const y = HUD_H + 7 + Math.floor(random01(i + 88) * (H - HUD_H - 18));
+          const inDirt = y >= HUD_H + 1;
+          if (!inDirt) continue;
+          rect(x, y, 3 + Math.floor(random01(i + 91) * 4), 2 + Math.floor(random01(i + 94) * 3), [118, 105, 84, 255]);
+        }
+
+        const cx = W / 2;
+
+        // Gold layer and central lode.
+        rect(0, GOLD_BED_TOP + 9, W, GOLD_BED_BOTTOM - GOLD_BED_TOP - 8, [66, 37, 15, 255]);
+        for (let x = 0; x < W; x += 6) {
+          const y = GOLD_BED_TOP + Math.floor(random01(x + 96) * 10);
+          const h = 2 + Math.floor(random01(x + 98) * 3);
+          const w = 5 + Math.floor(random01(x + 100) * 4);
+          rect(x, y, w, h, [126, 75, 22, 230]);
+          if (random01(x + 102) > 0.58) rect(x + 1, y + 1, Math.max(2, w - 2), 1, [255, 205, 42, 100]);
+        }
+        for (let x = 0; x < W; x += 12) {
+          const y = [GOLD_BED_TOP + 9, GOLD_BED_TOP + 13, GOLD_BED_TOP + 17, GOLD_BED_TOP + 21][Math.floor(random01(x + 101) * 4)];
+          const w = 7 + Math.floor(random01(x + 103) * 7);
+          const h = 3 + Math.floor(random01(x + 105) * 4);
+          const colors = [C.gold, C.goldDark, C.goldLight, [211, 139, 30, 255]];
+          const color = colors[Math.floor(random01(x + 107) * colors.length)];
+          rect(x, y, w, h, [52, 28, 11, 210]);
+          rect(x + 1, y, Math.max(2, w - 2), Math.max(2, h - 1), color);
+          if (random01(x + 109) > 0.45) rect(x + 2, y, 2, 1, C.goldLight);
+        }
+
+        for (let i = 0; i < 76; i++) {
+          const cluster = i < 48;
+          const spreadX = cluster ? 160 : W;
+          const baseX = cluster ? cx - 80 : 0;
+          const x = baseX + Math.floor(random01(i + 200) * spreadX);
+          const y = (cluster ? GOLD_BED_TOP + 4 : GOLD_BED_TOP + 8) + Math.floor(random01(i + 208) * (cluster ? 18 : 19));
+          const colors = [C.gold, C.goldLight, C.goldDark];
+          const w = 4 + Math.floor(random01(i + 211) * (cluster ? 7 : 5));
+          const h = 3 + Math.floor(random01(i + 214) * (cluster ? 5 : 3));
+          rect(x - 1, y + 1, w + 2, h, [46, 25, 17, 145]);
+          rect(x, y, w, h, colors[Math.floor(random01(i + 217) * 3)]);
+          rect(x + 1, y, Math.max(1, Math.floor(w / 2)), 1, C.goldLight, 0.9);
+        }
+
+        for (let i = 0; i < 44; i++) {
+          const x = cx - 64 + Math.floor(random01(i + 500) * 128);
+          const y = GOLD_TOP - 3 + Math.floor(random01(i + 503) * 13);
+          const w = 3 + Math.floor(random01(i + 506) * 7);
+          const h = 2 + Math.floor(random01(i + 509) * 4);
+          const colors = [C.gold, C.goldLight, C.goldDark, [211, 139, 30, 255]];
+          rect(x - 1, y + 1, w + 2, h, [46, 25, 17, 120]);
+          rect(x, y, w, h, colors[Math.floor(random01(i + 512) * colors.length)]);
+          if (random01(i + 515) > 0.35) rect(x + 1, y, Math.max(1, Math.floor(w / 2)), 1, C.goldLight, 0.75);
+        }
+
+      }
+
+      function drawColumns(t) {
+        demoOperators.forEach((op, i) => {
+          const x = op.x;
+          const color = laneColors[i % laneColors.length];
+          const offset = Math.floor((t * 18 + i * 3) % 12);
+          for (let y = PLAY_TOP - offset; y < GOLD_TOP; y += 12) {
+            if (y > HUD_H + 2) {
+              rect(x - DUG_TUNNEL_HALF + 1, y, 1, 6, color, 0.45);
+              rect(x + DUG_TUNNEL_HALF - 1, y + 3, 1, 4, color, 0.28);
+            }
+          }
+          const gy = 247 + ((i + Math.floor(t * 4)) % 3) * 3;
+          rect(x - 3, gy, 7, 4, [255, 205, 42, 170]);
+        });
+      }
+
+      function yForHours(hours) {
+        const progress = Math.max(0, Math.min(1, hours / GOLD_HOURS));
+        return SPRITE_TOP_Y + progress * (SPRITE_GOLD_Y - SPRITE_TOP_Y);
+      }
+
+      function climbProgressForHours(hours) {
+        return clamp01((hours - CLIMB_HOURS) / 0.5);
+      }
+
+      function yForOperatorStage(hours) {
+        const goldY = yForHours(GOLD_HOURS);
+        const climb = climbProgressForHours(hours);
+        if (climb <= 0) return yForHours(hours);
+        return goldY + (CLIMB_TOP_Y - goldY) * easeOutCubic(climb);
+      }
+
+      function drawHourMarkers(t) {
+        demoOperators.forEach((op, i) => {
+          const visibleHours = visibleHoursForOperator(op, i, t);
+          const lockerText = `#${op.locker}`;
+          const hoursText = `${visibleHours.toFixed(1)}H`;
+          const y = Math.round(Math.min(STATS_PANEL_Y - 15, yForOperatorStage(visibleHours) + 11));
+
+          ctx.save();
+          ctx.font = "5px monospace";
+          const textW = Math.ceil(Math.max(ctx.measureText(lockerText).width, ctx.measureText(hoursText).width));
+          ctx.restore();
+
+          const boxW = textW + 4;
+          const x = Math.max(1, Math.min(W - boxW - 1, Math.round(op.x - boxW / 2)));
+          rect(x, y, boxW, 14, [5, 8, 24, 218]);
+          rect(x, y, boxW, 1, C.gold, 0.8);
+          rect(x, y + 13, boxW, 1, [46, 25, 17, 230]);
+          drawCenteredOutlinedText(lockerText, x + boxW / 2, y + 1, C.goldLight, 5);
+          drawCenteredOutlinedText(hoursText, x + boxW / 2, y + 8, C.cream, 5);
+        });
+      }
+
+      function drawStatsPanel() {
+        rect(0, STATS_PANEL_Y, W, H - STATS_PANEL_Y, [5, 8, 24, 225]);
+        rect(0, STATS_PANEL_Y, W, 1, C.gold, 0.95);
+        rect(0, STATS_PANEL_Y + 1, W, 1, [255, 244, 116, 110]);
+
+        demoOperators.forEach((op, i) => {
+          const x = Math.max(0, Math.min(W - STATS_CARD_W, Math.round(op.x - STATS_CARD_W / 2)));
+          const y = STATS_PANEL_Y + 4;
+
+          rect(x - 1, y - 1, STATS_CARD_W + 2, STATS_CARD_H + 1, [2, 3, 8, 225]);
+          rect(x, y, STATS_CARD_W, STATS_CARD_H, [5, 8, 24, 242]);
+          rect(x, y, STATS_CARD_W, 1, i % 2 ? C.cyan : C.gold, 0.9);
+          rect(x, y + STATS_CARD_H - 1, STATS_CARD_W, 1, [46, 25, 17, 240]);
+
+          drawCenteredTvText(`#${op.locker}`, op.x, y + 2, C.goldLight, 5);
+          drawCenteredTvText(`${op.sessions}S`, op.x, y + 10, C.cream, 5);
+          drawCenteredTvText(`${op.currentHours.toFixed(1)}H`, op.x, y + 18, C.cream, 5);
+          drawCenteredTvText(`${op.projectedHours.toFixed(1)}P`, op.x, y + 26, C.cyan, 5);
+        });
+      }
+
+      function drawSparkles(t) {
+        const points = [
+          [34, GOLD_BED_TOP + 15], [76, GOLD_BED_TOP + 22], [126, GOLD_BED_TOP + 10], [168, GOLD_BED_TOP + 21],
+          [208, GOLD_BED_TOP + 9], [270, GOLD_BED_TOP + 9], [190, GOLD_BED_TOP + 17], [292, GOLD_BED_TOP + 18],
+          [238, GOLD_BED_TOP + 5], [252, GOLD_BED_TOP + 7], [230, GOLD_BED_TOP + 21], [263, GOLD_BED_TOP + 22],
+          [330, GOLD_BED_TOP + 13], [374, GOLD_BED_TOP + 22], [418, GOLD_BED_TOP + 16], [456, GOLD_BED_TOP + 23],
+        ];
+        points.forEach(([x, y], i) => {
+          const on = Math.floor(t * 6 + i) % 3 !== 0;
+          if (!on) return;
+          rect(x, y, 1, 1, C.cream);
+          rect(x - 1, y, 1, 1, C.goldLight);
+          rect(x + 1, y, 1, 1, C.goldLight);
+          rect(x, y - 1, 1, 1, C.goldLight);
+          rect(x, y + 1, 1, 1, C.goldLight);
+        });
+      }
+
+      function drawGoldSparkles(t) {
+        const sparklePoints = [];
+        for (let i = 0; i < 54; i++) {
+          const band = i % 4;
+          let minX = 8;
+          let maxX = W - 16;
+          if (band === 0) {
+            minX = 10;
+            maxX = 154;
+          } else if (band === 1) {
+            minX = W / 2 - 82;
+            maxX = W / 2 + 82;
+          } else if (band === 2) {
+            minX = W - 164;
+            maxX = W - 10;
+          }
+
+          const x = Math.floor(minX + random01(i + 820) * (maxX - minX));
+          const y = band === 1
+            ? GOLD_BED_TOP + 4 + Math.floor(random01(i + 860) * (GOLD_BED_BOTTOM - GOLD_BED_TOP - 7))
+            : GOLD_BED_TOP + 9 + Math.floor(random01(i + 880) * (GOLD_BED_BOTTOM - GOLD_BED_TOP - 11));
+          sparklePoints.push([x, y]);
+        }
+
+        sparklePoints.forEach(([x, y], i) => {
+          const phase = (t * 1.5 + i * 0.37) % 1;
+          if (phase > 0.36) return;
+          const alpha = 0.35 + (1 - phase / 0.36) * 0.65;
+          rect(x, y, 1, 1, C.cream, alpha);
+          rect(x - 1, y, 1, 1, C.goldLight, alpha);
+          rect(x + 1, y, 1, 1, C.goldLight, alpha);
+          rect(x, y - 1, 1, 1, C.goldLight, alpha);
+          rect(x, y + 1, 1, 1, C.goldLight, alpha);
+          if (i % 3 === 0) {
+            rect(x - 2, y, 1, 1, C.gold, alpha * 0.65);
+            rect(x + 2, y, 1, 1, C.gold, alpha * 0.65);
+          }
+        });
+      }
+
+      function drawMoleEncounters(t) {
+        const slot = Math.floor(t / 4);
+        demoOperators.forEach((op, i) => {
+          const visibleHours = visibleHoursForOperator(op, i, t);
+          if (visibleHours < 0.45 || visibleHours >= GOLD_HOURS) return;
+          if ((i + slot) % 7 !== 0) return;
+
+          const phase = (t % 4) / 4;
+          const pop = Math.sin(phase * Math.PI);
+          if (pop <= 0.08) return;
+
+          const side = 1;
+          const baseX = Math.round(op.x + side * (DUG_TUNNEL_HALF + 3));
+          const baseY = Math.round(Math.min(STATS_PANEL_Y - 18, yForOperatorStage(visibleHours) + 10));
+          const y = baseY + Math.round((1 - pop) * 5);
+          const blink = Math.floor(t * 5 + i) % 5 === 0;
+
+          rect(baseX - 5, baseY + 3, 10, 3, [46, 25, 17, 210]);
+          rect(baseX - 4, baseY + 2, 8, 2, [112, 77, 35, 190]);
+          rect(baseX - 4, y - 4, 8, 8, [46, 25, 17, 245]);
+          rect(baseX - 3, y - 5, 6, 7, [92, 58, 34, 255]);
+          rect(baseX - 5, y - 3, 2, 3, [78, 45, 24, 255]);
+          rect(baseX + 3, y - 3, 2, 3, [78, 45, 24, 255]);
+          rect(baseX - 2, y - 2, 1, 1, blink ? [92, 58, 34, 255] : C.cream);
+          rect(baseX + 1, y - 2, 1, 1, blink ? [92, 58, 34, 255] : C.cream);
+          rect(baseX, y, 1, 1, [255, 190, 166, 255]);
+
+          const swing = t * TOOL_ANIMATION_FPS + i;
+          const impactFrame = Math.floor(swing) % 4 === 1;
+          if (impactFrame) {
+            drawImpactBurst(baseX - side * 3, y - 3, swing % 1, C.goldLight);
+            rect(baseX + side * 4, y - 8, 1, 4, C.cream, 0.8);
+            rect(baseX + side * 4, y - 3, 1, 1, C.cream, 0.8);
+          }
+        });
+      }
+
+      function drawVictoryLadders(t) {
+        const top = Math.round(CLIMB_TOP_Y + 11);
+        const bottom = Math.round(yForHours(GOLD_HOURS) + 10);
+        demoOperators.forEach((op, i) => {
+          const hours = visibleHoursForOperator(op, i, t);
+          const climb = climbProgressForHours(hours);
+          if (climb <= 0) return;
+
+          const x = op.x;
+          rect(x - 4, top, 1, bottom - top, [126, 75, 34, 245]);
+          rect(x + 4, top, 1, bottom - top, [126, 75, 34, 245]);
+          rect(x - 4, top, 1, bottom - top, [255, 205, 42, 65]);
+          for (let y = top + 4; y < bottom; y += 8) {
+            rect(x - 4, y, 9, 1, [184, 116, 44, 245]);
+            if ((Math.floor(t * 3) + i + y) % 4 === 0) rect(x - 3, y - 1, 7, 1, C.goldLight, 0.35);
+          }
+        });
+      }
+
+      function drawTreasureChest(cx, groundY, t, seed) {
+        const x = Math.round(Math.max(7, Math.min(W - 15, cx - 5)));
+        const y = Math.round(groundY - 9);
+        const burst = (t * 0.52 + seed * 0.17) % 1;
+
+        oval(x + 5, groundY + 1, 7, 2, C.shadow, 0.62);
+        rect(x - 1, y + 6, 13, 2, [46, 25, 17, 210]);
+        rect(x, y + 4, 11, 5, [92, 48, 25, 255]);
+        rect(x + 1, y + 5, 9, 3, [126, 75, 34, 255]);
+        rect(x + 1, y + 4, 9, 1, C.goldDark, 0.9);
+        rect(x + 5, y + 4, 2, 5, C.gold, 0.95);
+        rect(x + 5, y + 6, 2, 2, [46, 25, 17, 220]);
+
+        rect(x, y + 2, 11, 3, [46, 25, 17, 255]);
+        rect(x + 1, y + 1, 9, 4, [126, 75, 34, 255]);
+        rect(x + 2, y + 2, 7, 1, C.gold, 0.85);
+        rect(x + 3, y + 1, 5, 1, C.goldLight, 0.75);
+
+        for (let p = 0; p < 8; p++) {
+          const life = (burst + p * 0.12) % 1;
+          const arc = Math.sin(life * Math.PI);
+          const drift = (random01(seed * 800 + p * 7) - 0.5) * 9;
+          const px = x + 5 + drift + Math.sin(t * 2 + p) * 1.2;
+          const py = y + 2 - arc * (4 + (p % 3) * 1.5) + life * 2;
+          const color = p % 3 === 0 ? C.goldLight : (p % 3 === 1 ? C.gold : C.goldDark);
+          const alpha = 0.35 + (1 - life) * 0.65;
+
+          rect(px, py, 2, 1 + (p % 2), [46, 25, 17, 150], alpha * 0.65);
+          rect(px, py, p % 2 ? 1 : 2, 1, color, alpha);
+        }
+      }
+
+      function drawVictoryChests(t) {
+        demoOperators.forEach((op, i) => {
+          const hours = visibleHoursForOperator(op, i, t);
+          const climb = climbProgressForHours(hours);
+          if (climb < 0.82) return;
+
+          const side = op.x > W - 28 ? -1 : 1;
+          drawTreasureChest(op.x + side * 7, CLIMB_TOP_Y + 11, t, i);
+        });
+      }
+
+      function activeCutIn() {
+        return currentOvertakeCelebration;
+      }
+
+      function cutInsReady(t) {
+        return t >= cutInReadyAt;
+      }
+
+      function rankedOperators(t) {
+        return demoOperators
+          .map((op, i) => ({ op, i, visibleHours: visibleHoursForOperator(op, i, t) }))
+          .sort((a, b) => {
+            return (b.visibleHours - a.visibleHours)
+              || (b.op.sessions - a.op.sessions)
+              || (a.op.locker - b.op.locker);
+          });
+      }
+
+      function startOvertakeCelebration(t) {
+        const ranked = rankedOperators(t);
+        const order = ranked.map(item => item.op.locker);
+
+        if (!previousOvertakeOrder) {
+          previousOvertakeOrder = order;
+          return;
+        }
+
+        const previousRank = new Map(previousOvertakeOrder.map((locker, rank) => [locker, rank]));
+        const currentByLocker = new Map(ranked.map((item, rank) => [item.op.locker, { ...item, rank }]));
+
+        ranked.forEach((item, currentRank) => {
+          const oldRank = previousRank.get(item.op.locker);
+          if (oldRank === undefined || oldRank <= currentRank) return;
+
+          ranked.slice(currentRank + 1).forEach((other) => {
+            const oldOtherRank = previousRank.get(other.op.locker);
+            if (oldOtherRank === undefined || oldOtherRank >= oldRank) return;
+            const key = `${item.op.locker}-${other.op.locker}`;
+            if (!celebratedOvertakes.has(key)) {
+              pendingOvertakes.set(key, {
+                locker: item.op.locker,
+                passedLocker: other.op.locker,
+                firstSeen: t,
+                rankGain: oldRank - currentRank,
+              });
+            }
+          });
+        });
+
+        previousOvertakeOrder = order;
+
+        if (!cutInsReady(t)) {
+          return;
+        }
+        if (activeCutIn() || t - lastOvertakeCelebrationEnd < OVERTAKE_CELEBRATION_COOLDOWN_SECONDS) return;
+
+        let best = null;
+        pendingOvertakes.forEach((pending, key) => {
+          const item = currentByLocker.get(pending.locker);
+          const passed = currentByLocker.get(pending.passedLocker);
+          if (!item || !passed || item.rank >= passed.rank || t - pending.firstSeen > 120) {
+            pendingOvertakes.delete(key);
+            return;
+          }
+
+          const margin = item.visibleHours - passed.visibleHours;
+          if (item.visibleHours < OVERTAKE_MIN_HOURS || margin < OVERTAKE_LEAD_HOURS) return;
+
+          const candidate = {
+            op: item.op,
+            passed: passed.op,
+            visibleHours: item.visibleHours,
+            passedHours: passed.visibleHours,
+            margin,
+            rankGain: pending.rankGain,
+            key,
+          };
+          if (!best || candidate.rankGain > best.rankGain || candidate.margin > best.margin) best = candidate;
+        });
+
+        if (!best && IS_PREVIEW_MODE && !previewOvertakeShown) {
+          const ready = ranked.filter(item => item.visibleHours >= OVERTAKE_MIN_HOURS);
+          if (ready.length >= 2) {
+            const item = ready[0];
+            const passed = ready[1];
+            const naturalMargin = item.visibleHours - passed.visibleHours;
+            best = {
+              op: item.op,
+              passed: passed.op,
+              visibleHours: item.visibleHours,
+              passedHours: passed.visibleHours,
+              margin: Math.max(OVERTAKE_LEAD_HOURS, Math.min(0.48, naturalMargin)),
+              rankGain: 1,
+              key: "__preview_overtake__",
+            };
+          }
+        }
+
+        if (!best) return;
+
+        if (best.key === "__preview_overtake__") {
+          previewOvertakeShown = true;
+        } else {
+          pendingOvertakes.delete(best.key);
+          celebratedOvertakes.add(best.key);
+        }
+        currentOvertakeCelebration = {
+          ...best,
+          start: t,
+          end: t + OVERTAKE_CELEBRATION_SECONDS,
+        };
+      }
+
+      function drawCelebrationImageMiner(cx, cy, t, progress = 0) {
+        if (!USE_IMAGE_SPRITES) return false;
+
+        const bounce = Math.round(Math.sin(t * 8) * 1);
+        const footY = cy + 34 + bounce;
+        const sceneZoom = 0.82 + easeOutCubic(progress) * 0.22;
+
+        if (celebrationSceneSpriteLoaded) {
+          const drawH = 68 * sceneZoom;
+          const drawW = drawH * (celebrationSceneFrame.sw / celebrationSceneFrame.sh);
+          const dx = Math.round(cx - drawW * celebrationSceneFrame.anchorX);
+          const dy = Math.round(footY - drawH);
+
+          oval(cx, footY + 1, 48 * sceneZoom, 5, C.shadow, 0.48);
+          ctx.save();
+          ctx.imageSmoothingEnabled = true;
+          ctx.drawImage(
+            celebrationSceneSprite,
+            celebrationSceneFrame.sx,
+            celebrationSceneFrame.sy,
+            celebrationSceneFrame.sw,
+            celebrationSceneFrame.sh,
+            dx,
+            dy,
+            drawW,
+            drawH,
+          );
+          ctx.restore();
+
+          return true;
+        }
+
+        oval(cx, footY + 1, 22, 5, C.shadow, 0.62);
+
+        if (excitementSpriteLoaded) {
+          const drawH = 66;
+          const drawW = drawH * (excitementFrame.sw / excitementFrame.sh);
+          const dx = Math.round(cx - drawW * excitementFrame.anchorX);
+          const dy = Math.round(footY - drawH);
+
+          ctx.save();
+          ctx.imageSmoothingEnabled = true;
+          ctx.drawImage(
+            excitementSprite,
+            excitementFrame.sx,
+            excitementFrame.sy,
+            excitementFrame.sw,
+            excitementFrame.sh,
+            dx,
+            dy,
+            drawW,
+            drawH,
+          );
+          ctx.restore();
+
+          const sparkle = Math.floor(t * 8) % 2 === 0;
+          if (sparkle) {
+            drawImpactBurst(cx - 27, dy + 8, 0.2, C.goldLight);
+            drawImpactBurst(cx + 27, dy + 13, 0.35, C.cyan);
+          }
+
+          return true;
+        }
+
+        if (!minerSpriteSheetLoaded) return false;
+
+        const sprite = minerImageFrames.idle;
+        const drawH = 60;
+        const drawW = drawH * (sprite.sw / sprite.sh);
+        const dx = Math.round(cx - drawW * sprite.anchorX);
+        const dy = Math.round(footY - drawH);
+
+        ctx.save();
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(minerSpriteSheet, sprite.sx, sprite.sy, sprite.sw, sprite.sh, dx, dy, drawW, drawH);
+        ctx.restore();
+
+        rect(cx - 18, dy - 8, 36, 9, [46, 25, 17, 255]);
+        rect(cx - 17, dy - 9, 34, 8, C.gold);
+        rect(cx - 14, dy - 9, 28, 2, C.goldLight);
+        rect(cx + 8, dy - 2, 7, 1, C.goldDark, 0.72);
+        rect(cx - 19, dy - 6, 2, 5, C.cream, 0.8);
+        rect(cx + 17, dy - 6, 2, 5, C.cream, 0.8);
+
+        return true;
+      }
+
+      function drawCelebrationMiner(cx, cy, t, progress = 0) {
+        if (drawCelebrationImageMiner(cx, cy, t, progress)) return;
+
+        const bounce = Math.round(Math.sin(t * 8) * 1);
+        const y = cy + bounce;
+        const suit = [42, 146, 255, 255];
+        const suitDark = [17, 82, 172, 255];
+        const skin = [220, 139, 88, 255];
+        const skinShade = [152, 76, 52, 255];
+
+        oval(cx, y + 33, 17, 4, C.shadow, 0.7);
+        rect(cx - 8, y + 14, 6, 16, suitDark);
+        rect(cx + 2, y + 14, 6, 16, suitDark);
+        rect(cx - 11, y + 29, 10, 4, C.boot);
+        rect(cx + 1, y + 29, 10, 4, C.boot);
+        rect(cx - 11, y + 2, 22, 18, [2, 3, 8, 255]);
+        rect(cx - 9, y + 4, 18, 15, suit);
+        rect(cx - 7, y + 4, 3, 13, C.cyan, 0.9);
+        rect(cx + 4, y + 4, 3, 13, C.goldLight, 0.85);
+        rect(cx - 9, y + 16, 18, 3, [35, 22, 15, 255]);
+        rect(cx - 2, y + 16, 4, 3, C.goldLight);
+
+        ctx.save();
+        ctx.strokeStyle = rgba(skin);
+        ctx.lineWidth = 3;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(cx - 9, y + 6);
+        ctx.lineTo(cx - 17, y - 25);
+        ctx.moveTo(cx + 9, y + 6);
+        ctx.lineTo(cx + 17, y - 25);
+        ctx.stroke();
+        ctx.restore();
+        oval(cx - 18, y - 26, 3, 3, C.cream);
+        oval(cx + 18, y - 26, 3, 3, C.cream);
+        rect(cx - 16, y - 34, 32, 8, [46, 25, 17, 255]);
+        rect(cx - 15, y - 35, 30, 7, C.gold);
+        rect(cx - 12, y - 35, 24, 2, C.goldLight);
+        rect(cx + 7, y - 29, 6, 1, C.goldDark, 0.7);
+
+        oval(cx, y - 8, 9, 9, [2, 3, 8, 255]);
+        oval(cx, y - 8, 8, 8, skin);
+        rect(cx - 10, y - 18, 20, 7, [2, 3, 8, 255]);
+        oval(cx, y - 18, 11, 6, [255, 205, 42, 255]);
+        rect(cx - 12, y - 14, 24, 3, [255, 205, 42, 255]);
+        rect(cx - 4, y - 22, 8, 3, [46, 25, 17, 255]);
+        rect(cx - 2, y - 22, 4, 2, C.goldLight);
+        rect(cx - 3, y - 9, 2, 2, C.black);
+        rect(cx + 2, y - 9, 2, 2, C.black);
+        rect(cx - 4, y - 5, 1, 1, skinShade);
+        rect(cx - 3, y - 4, 6, 1, skinShade);
+        rect(cx + 3, y - 5, 1, 1, skinShade);
+
+        const sparkle = Math.floor(t * 8) % 2 === 0;
+        if (sparkle) {
+          drawImpactBurst(cx - 24, y - 18, 0.2, C.goldLight);
+          drawImpactBurst(cx + 24, y - 16, 0.35, C.cyan);
+        }
+      }
+
+      function drawCelebrationConfetti(t, alpha) {
+        const colors = [C.goldLight, C.gold, C.cyan, C.cream, C.pink];
+        for (let i = 0; i < 72; i++) {
+          const seed = i * 31;
+          const lane = random01(seed + 1);
+          const cycle = (t * (0.18 + random01(seed + 2) * 0.12) + random01(seed + 3)) % 1;
+          const drift = Math.sin((cycle + random01(seed + 4)) * Math.PI * 2) * (10 + random01(seed + 5) * 14);
+          const x = 24 + lane * (W - 48) + drift;
+          const y = 42 + cycle * 160;
+          const w = 1 + Math.floor(random01(seed + 6) * 3);
+          const h = 2 + Math.floor(random01(seed + 7) * 4);
+          const color = colors[Math.floor(random01(seed + 8) * colors.length)];
+          const flip = Math.floor(t * 7 + i) % 2 === 0;
+          const pieceAlpha = alpha * (0.45 + (1 - cycle) * 0.5);
+
+          rect(x, y, flip ? w : h, flip ? h : w, [2, 3, 8, 170], pieceAlpha * 0.45);
+          rect(x, y, flip ? w : h, flip ? h : w, color, pieceAlpha);
+          if (i % 9 === 0) drawImpactBurst(Math.round(x), Math.round(y), (cycle * 2) % 1, color);
+        }
+      }
+
+      function drawOvertakeScene(cx, cy, t, progress) {
+        const slide = easeOutCubic(progress);
+        const runnerX = cx - 94 + slide * 148;
+        const footY = cy + 36;
+
+        for (let i = 0; i < 5; i++) {
+          const x = runnerX - 30 - i * 8 + Math.sin(t * 8 + i) * 2;
+          const y = footY - 34 + i * 6;
+          rect(x, y, 14 - i, 2, i % 2 ? C.cyan : C.goldLight, 0.34);
+        }
+
+        if (mirroredExcitementSpriteLoaded) {
+          const runnerH = 76;
+          const runnerW = runnerH * (excitementFrame.sw / excitementFrame.sh);
+          const runnerDx = Math.round(runnerX - runnerW * excitementFrame.anchorX);
+          const runnerDy = Math.round(footY - runnerH);
+
+          oval(runnerX, footY + 2, 19, 4, C.shadow, 0.72);
+          ctx.save();
+          ctx.imageSmoothingEnabled = true;
+          ctx.drawImage(
+            mirroredExcitementSprite,
+            excitementFrame.sx,
+            excitementFrame.sy,
+            excitementFrame.sw,
+            excitementFrame.sh,
+            runnerDx,
+            runnerDy,
+            runnerW,
+            runnerH,
+          );
+          ctx.restore();
+
+          if (progress > 0.45 && progress < 0.82) {
+            drawImpactBurst(runnerX + 14, footY - 48, (t * 2) % 1, C.goldLight);
+          }
+          return;
+        }
+
+        drawCelebrationMiner(runnerX, cy + 3, t, progress);
+      }
+
+      function drawOvertakeCelebration(t) {
+        if (currentOvertakeCelebration && t >= currentOvertakeCelebration.end) {
+          lastOvertakeCelebrationEnd = t;
+          currentOvertakeCelebration = null;
+        }
+
+        startOvertakeCelebration(t);
+        if (!currentOvertakeCelebration) return false;
+
+        const celebration = currentOvertakeCelebration;
+        const progress = clamp01((t - celebration.start) / OVERTAKE_CELEBRATION_SECONDS);
+        const alpha = Math.min(1, progress * 5, (1 - progress) * 5);
+        const rawMinutesAhead = Math.max(1, Math.round(celebration.margin * 60));
+        const minutesAhead = Math.min(rawMinutesAhead, OVERTAKE_MAX_CALLOUT_MINUTES);
+        const minutesLabel = `+${minutesAhead} MINS`;
+
+        rect(0, 0, W, H, [2, 3, 8, 232], alpha);
+        rect(18, 42, W - 36, 164, [5, 8, 24, 242], alpha);
+        rect(18, 42, W - 36, 3, C.cyan, alpha);
+        rect(18, 203, W - 36, 3, [46, 25, 17, 255], alpha);
+        rect(20, 45, W - 40, 1, [255, 244, 116, 170], alpha);
+        drawCelebrationConfetti(t - celebration.start, alpha);
+
+        drawCenteredTvText("Digging Ahead!", W / 2, 54, C.goldLight, 13);
+        drawCenteredTvText(`#${celebration.op.locker}`, W / 2, 84, C.cream, 18);
+        drawCenteredTvText(`PASSED #${celebration.passed.locker}`, W / 2, 112, C.cyan, 6);
+        drawCenteredTvText(`${celebration.visibleHours.toFixed(1)}H CURRENT`, W / 2, 125, C.cream, 5);
+        drawCenteredTvText(minutesLabel, W / 2, 136, C.gold, 5);
+        drawOvertakeScene(W / 2, 181, t, progress);
+        return true;
+      }
+
+      function drawImageMinerSprite(cx, y, idx, frame, state, toolType, locker) {
+        if (!USE_IMAGE_SPRITES) return false;
+        if (!minerSpriteSheetLoaded) return true;
+
+        const frameName = state === "climb" ? "idle" : (state === "victory" ? "idle" : toolType);
+        const sprite = minerImageFrames[frameName] || minerImageFrames.pickaxe;
+        const bob = state === "victory" ? (frame % 2 === 0 ? -1 : 1) : [0, 0, 1, 0][frame % 4];
+        const drawH = state === "victory" ? 26 : 28;
+        const drawW = drawH * (sprite.sw / sprite.sh);
+        const footY = Math.round(y) + bob;
+        const dx = Math.round(Math.max(0, Math.min(W - drawW, cx - drawW * sprite.anchorX)));
+        const dy = Math.round(footY + 11 - drawH);
+
+        ctx.save();
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(minerSpriteSheet, sprite.sx, sprite.sy, sprite.sw, sprite.sh, dx, dy, drawW, drawH);
+        ctx.restore();
+
+        return true;
+      }
+
+      function minerSprite(cx, y, idx, frame, depth, state = "dig", toolType = "pickaxe", locker = idx + 1) {
+        const helmet = helmets[idx % helmets.length];
+        const suit = suits[Math.floor(idx / 2) % suits.length];
+        const hi = highlights[Math.floor(idx / 2) % highlights.length];
+        const face = skinTones[idx % skinTones.length];
+        const faceShade = skinShades[idx % skinShades.length];
+        const hair = hairColors[(idx + Math.floor(idx / 5)) % hairColors.length];
+        const glove = gloveColors[(idx + 1) % gloveColors.length];
+        const belt = beltColors[idx % beltColors.length];
+        const scarf = idx % 3 === 0 ? C.goldLight : (idx % 3 === 1 ? C.cream : C.cyan);
+        const swing = frame % 4;
+        const bob = state === "victory" ? (frame % 2 === 0 ? -1 : 1) : [0, 0, 1, 0][swing];
+        const footY = Math.round(y) + bob;
+        const U = SCALE * 0.88;
+        const sx = Math.round(cx * SCALE);
+        const sy = Math.round(footY * SCALE);
+
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+
+        function px(x) {
+          return sx + x * U;
+        }
+
+        function py(y) {
+          return sy + y * U;
+        }
+
+        function fillOval(x, y, rx, ry, color, alphaScale = 1) {
+          ctx.fillStyle = rgba(color, alphaScale);
+          ctx.beginPath();
+          ctx.ellipse(px(x), py(y), rx * U, ry * U, 0, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        function fillRound(x, y, w, h, r, color, alphaScale = 1) {
+          ctx.fillStyle = rgba(color, alphaScale);
+          ctx.beginPath();
+          if (ctx.roundRect) {
+            ctx.roundRect(px(x), py(y), w * U, h * U, r * U);
+          } else {
+            const x0 = px(x);
+            const y0 = py(y);
+            const width = w * U;
+            const height = h * U;
+            const radius = r * U;
+            ctx.moveTo(x0 + radius, y0);
+            ctx.lineTo(x0 + width - radius, y0);
+            ctx.quadraticCurveTo(x0 + width, y0, x0 + width, y0 + radius);
+            ctx.lineTo(x0 + width, y0 + height - radius);
+            ctx.quadraticCurveTo(x0 + width, y0 + height, x0 + width - radius, y0 + height);
+            ctx.lineTo(x0 + radius, y0 + height);
+            ctx.quadraticCurveTo(x0, y0 + height, x0, y0 + height - radius);
+            ctx.lineTo(x0, y0 + radius);
+            ctx.quadraticCurveTo(x0, y0, x0 + radius, y0);
+          }
+          ctx.fill();
+        }
+
+        function fillLine(x1, y1, x2, y2, width, color, alphaScale = 1) {
+          ctx.strokeStyle = rgba(color, alphaScale);
+          ctx.lineWidth = width * U;
+          ctx.beginPath();
+          ctx.moveTo(px(x1), py(y1));
+          ctx.lineTo(px(x2), py(y2));
+          ctx.stroke();
+        }
+
+        function fillDot(x, y, radius, color, alphaScale = 1) {
+          fillOval(x, y, radius, radius, color, alphaScale);
+        }
+
+        fillOval(0, 8.2, 7.2, 1.5, C.shadow);
+
+        // Smooth arcade mascot silhouette, drawn at native canvas resolution.
+        fillRound(-5.5, 1.6, 4.6, 7.1, 1.3, C.black);
+        fillRound(0.9, 1.6, 4.6, 7.1, 1.3, C.black);
+        fillRound(-4.6, 2.1, 2.8, 5.5, 1.1, suit);
+        fillRound(2.1, 2.1, 2.8, 5.3, 1.1, suit);
+        fillRound(-6.4, 6.8, 6.5, 2.4, 1.0, C.boot);
+        fillRound(0.8, 6.8, 6.5, 2.4, 1.0, C.boot);
+        fillRound(-5.1, 7.0, 3.2, 0.8, 0.4, [72, 72, 82, 255]);
+        fillRound(2.1, 7.0, 3.2, 0.8, 0.4, [72, 72, 82, 255]);
+
+        fillRound(-6.5, -9.4, 13.0, 12.7, 2.7, C.black);
+        fillRound(-5.5, -8.4, 11.0, 10.7, 2.2, suit);
+        fillRound(-5.4, -8.3, 2.0, 8.7, 1.0, hi);
+        fillRound(3.4, -8.3, 2.0, 8.7, 1.0, hi);
+        fillLine(-2.6, -8.0, -1.5, 1.3, 0.55, C.cream, 0.95);
+        fillLine(2.6, -8.0, 1.5, 1.3, 0.55, C.cream, 0.95);
+        fillRound(-2.7, -8.5, 5.4, 2.2, 1.0, scarf);
+        fillOval(0, -5.0, 2.5, 2.1, [255, 245, 198, 205]);
+        fillRound(-5.5, -0.4, 11.0, 1.8, 0.7, belt);
+        fillDot(0, 0.4, 0.45, C.goldLight);
+
+        fillOval(0, -13.4, 5.2, 5.1, C.black);
+        fillOval(0, -13.6, 4.4, 4.3, face);
+        fillOval(-3.6, -14.0, 1.1, 2.9, hair);
+        fillOval(3.6, -14.0, 1.1, 2.9, hair);
+        fillRound(-3.0, -17.0, 6.0, 1.8, 0.9, hair, 0.72);
+        fillDot(-1.7, -14.1, 0.45, C.black);
+        fillDot(1.7, -14.1, 0.45, C.black);
+        fillOval(1.3, -11.8, 1.6, 0.7, faceShade, 0.82);
+        fillOval(0, -10.7, 2.2, 0.6, faceShade, 0.75);
+
+        fillOval(0, -20.1, 6.3, 4.2, C.black);
+        fillOval(0, -20.3, 5.5, 3.5, helmet);
+        fillRound(-6.6, -18.6, 13.2, 2.4, 1.0, C.black);
+        fillRound(-6.1, -18.8, 12.2, 1.9, 0.9, helmet);
+        fillRound(-2.3, -23.4, 4.6, 1.8, 0.8, C.black);
+        fillDot(0, -23.5, 0.8, C.goldLight, frame % 2 ? 0.55 : 1);
+        fillOval(-3.5, -21.6, 1.9, 0.55, C.goldLight, 0.55);
+        fillOval(3.9, -21.6, 1.4, 0.5, hi, 0.65);
+
+        if (state === "victory") {
+          fillLine(-5.5, -8.0, -7.8, -13.3, 1.7, face);
+          fillLine(5.5, -8.0, 7.8, -13.3, 1.7, face);
+          fillDot(-8.2, -13.8, 1.25, glove, frame % 2 ? 0.7 : 1);
+          fillDot(8.2, -13.8, 1.25, glove, frame % 2 ? 1 : 0.7);
+          fillLine(-2.2, -3.9, 2.2, -3.9, 0.8, C.goldLight, 0.9);
+          fillDot(0, 10.4, 0.75, C.gold, frame % 2 ? 0.45 : 0.9);
+          ctx.restore();
+          return;
+        }
+
+        const toolColor = toolType === "drill" ? C.cyan : (swing < 2 ? C.goldLight : C.cream);
+        const impact = toolType === "drill" || swing === 1 || swing === 3;
+        const lift = impact ? 1.6 : -2.0;
+        const toolBottom = impact ? 9.0 : 5.4;
+        const shake = toolType === "drill" && frame % 2 === 0 ? -0.35 : 0.35;
+
+        // Downward digging pose: tools strike into the soil below the sprite.
+        fillLine(-5.5, -7.0, -2.2, -0.8 + lift, 1.7, suit);
+        fillLine(5.5, -7.0, 2.2, -0.8 + lift, 1.7, suit);
+        fillDot(-2.2, -0.8 + lift, 1.05, glove);
+        fillDot(2.2, -0.8 + lift, 1.05, glove);
+
+        if (toolType === "drill") {
+          fillRound(-3.5 + shake, -3.4 + lift, 7.0, 6.0, 1.5, [54, 61, 76, 255]);
+          fillRound(-2.5 + shake, -2.6 + lift, 5.0, 4.2, 1.1, toolColor);
+          fillRound(-1.4 + shake, 1.3 + lift, 2.8, 3.2, 0.9, C.goldLight);
+          fillLine(0 + shake, 4.0 + lift, 0 + shake, 10.0, 1.1, C.goldLight);
+          fillDot(0 + shake, 10.4, 1.0, [255, 220, 64, 230]);
+          fillDot(-1.9 + shake, 6.4, 0.55, C.cyan, 0.9);
+          fillDot(2.0 + shake, 7.2, 0.55, C.cyan, frame % 2 ? 0.45 : 0.9);
+        } else if (toolType === "shovel") {
+          fillLine(0, -9.0 + lift, 0, toolBottom, 0.85, [126, 75, 34, 255]);
+          fillDot(0, -0.4 + lift, 0.85, glove);
+          fillOval(0, toolBottom + 1.5, 3.1, 2.0, [54, 61, 76, 255]);
+          fillOval(0, toolBottom + 0.8, 2.0, 0.6, C.cream);
+          if (!impact) fillOval(0, -9.9 + lift, 2.4, 1.0, [54, 61, 76, 255], 0.8);
+        } else {
+          fillLine(0, -10.0 + lift, 0, toolBottom, 0.85, [126, 75, 34, 255]);
+          fillDot(0, -0.6 + lift, 0.85, glove);
+          fillLine(-3.0, toolBottom + 0.2, 3.0, toolBottom + 0.2, 0.95, toolColor);
+          fillLine(-2.1, toolBottom - 1.0, -2.1, toolBottom + 1.5, 0.85, toolColor);
+          fillLine(2.1, toolBottom - 1.0, 2.1, toolBottom + 1.5, 0.85, toolColor);
+        }
+
+        const dustAlpha = 0.5 + 0.3 * Math.sin(depth * Math.PI * 2 + idx);
+        fillOval(-3.5 + (idx % 3), 10.4, 1.1, 0.45, [210, 143, 54, 180], dustAlpha);
+        fillDot(2.3 - (idx % 2), 11.2, 0.45, [255, 220, 64, 150], dustAlpha);
+        if (impact) {
+          fillOval(-3.1, 8.6, 1.15, 0.45, [255, 220, 64, 220]);
+          fillDot(0.2, 9.4, 0.5, [210, 143, 54, 230]);
+          fillOval(3.3, 8.8, 1.15, 0.45, [184, 116, 44, 230]);
+          if (toolType === "drill") {
+            fillDot(-1.6, 7.0, 0.5, C.cyan, frame % 2 ? 0.5 : 1);
+            fillDot(1.8, 7.8, 0.45, C.goldLight);
+          }
+        }
+
+        ctx.restore();
+      }
+
+      function drawMiners(t) {
+        demoOperators.forEach((op, i) => {
+          const x = op.x;
+          const visibleHours = visibleHoursForOperator(op, i, t);
+          const climb = climbProgressForHours(visibleHours);
+          const y = yForOperatorStage(visibleHours);
+          const frame = Math.floor(t * TOOL_ANIMATION_FPS + i) % 4;
+          const state = climb > 0 ? "climb" : (visibleHours >= GOLD_HOURS ? "victory" : "dig");
+          const toolType = toolForHours(visibleHours);
+          if (!drawImageMinerSprite(x, y, i, frame, state, toolType, op.locker)) {
+            const depth = clamp01(visibleHours / GOLD_HOURS);
+            minerSprite(x, y, i, frame, depth, state, toolType, op.locker);
+          }
+        });
+      }
+
+      function drawFrame(now) {
+        const t = now / 1000;
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.setTransform(SCALE, 0, 0, SCALE, 0, 0);
+        ctx.imageSmoothingEnabled = false;
+
+        drawStatic(t);
+        drawDugTunnels(t);
+        drawMoleEncounters(t);
+        drawVictoryLadders(t);
+        drawSparkles(t);
+        drawGoldSparkles(t);
+        drawHourMarkers(t);
+        drawMiners(t);
+        drawVictoryChests(t);
+        drawStatsPanel();
+        drawOvertakeCelebration(t);
+
+        requestAnimationFrame(drawFrame);
+      }
+
+      requestAnimationFrame(drawFrame);
+    })();
+  </script>
+</body>
+</html>
